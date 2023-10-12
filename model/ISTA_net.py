@@ -26,7 +26,8 @@ class BasicBlock1D(torch.nn.Module):
         x = x - self.lambda_step * torch.matmul(x, PhiTPhi)  # 使用matmul处理1D数据矩阵乘法，x为行向量则x左乘PhiTPhi
 
         x = x + self.lambda_step * PhiTb
-        x_input = x.view(-1, 1, x.size(-1))  # 为了使用conv1d，input.shape=[batch_size, in_channels, length]
+        # 为了使用conv1d，input.shape=[batch_size, in_channels, length] 在这之前为了矩阵运算，x.shape=[batch_size, length]
+        x_input = x.view(-1, 1, x.size(-1))
 
         # x的更新：x(k) = argx min1/2||x−r(k)||2 + λ||Ψx||1
         # 线性变换Ψx用非线性变换的卷积网络ϝ来替换，省去人工设计线性变换矩阵Ψ的过程，模型容量变大了，且每一层网络的权重可以不同。
@@ -95,7 +96,7 @@ if __name__ == "__main__":
     model = ISTANet1D(LayerNo)
     print(model)
 
-    x = torch.randn(1, 101)  # 原信号，行向量
+    x = torch.randn(1, 101)  # 原信号，行向量 (batch_size, 101)
     Phi = torch.randn(46, 101)  # 采样矩阵，行向量为单个采样光谱
     # 行向量y=Phi*x
     Phix = torch.matmul(x, torch.transpose(Phi, 0, 1))  # 采样后的信号，行向量 (1, 46)
@@ -117,4 +118,5 @@ if __name__ == "__main__":
 
     layer_num = len(model.fcs)
     print(layer_num)
+
 

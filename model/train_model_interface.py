@@ -22,26 +22,31 @@ class StepRunner:
     接收神经网络模型、损失函数、阶段（"train"或"val"）、指标字典、优化器和学习率调度器作为参数。
     """
 
-    def __init__(self, device, dtype, net, loss_fn, stage="train", metrics_dict=None,
+    def __init__(self, device, dtype, net, Phi, Qinit, loss_fn, stage="train", metrics_dict=None,
                  optimizer=None, lr_scheduler=None
                  ):
         self.device, self.dtype = device, dtype
         self.net, self.loss_fn = net, loss_fn
+        self.Phi, self.Qinit = Phi, Qinit
         self.metrics_dict, self.stage = metrics_dict, stage
         self.optimizer, self.lr_scheduler = optimizer, lr_scheduler
 
-    def __call__(self, Phix, Phi, Qinit, label):  # __call__使实例能够像函数一样被调用
+    def __call__(self, Phix, label):  # __call__使实例能够像函数一样被调用
         """用于执行一步训练或验证
         包括计算损失、反向传播、参数更新（仅在训练阶段）、计算指标，并返回损失和指标的字典。
         """
         # 移动数据到cuda
-        Phix = Phix.to(self.device, self.dtype)
-        Phi = Phi.to(self.device, self.dtype)
-        Qinit = Qinit.to(self.device, self.dtype)
-        label = label.to(self.device, self.dtype)
+        Phix = Phix.to(self.device, self.dtype)  # 观测值y input
+        label = label.to(self.device, self.dtype)  # 原信号x 训练的label
+
+        self.Phi = self.Phi.to(self.device, self.dtype)  # 采样矩阵
+        self.Qinit = self.Qinit.to(self.device, self.dtype)  # 初始值
 
         # ---forward计算损失---
-        pred, loss_layers_sym = self.net(Phix, Phi, Qinit)  # 前向传播
+        # preds = self.net(features)  # 前向传播
+        # loss = self.loss_fn(preds, labels)  # 计算损失
+
+        pred, loss_layers_sym = self.net(Phix, self.Phi, self.Qinit)  # 前向传播
 
         # loss计算分为两步
         loss_discrepancy = torch.mean(torch.pow(pred - label, 2))
@@ -53,6 +58,7 @@ class StepRunner:
         gamma = torch.Tensor([0.01]).to(self.device, self.dtype)  # 定值？？？
 
         loss = loss_discrepancy + torch.mul(gamma, loss_constraint)
+        # print(loss)
 
         # ---backward反向传播和参数更新（仅在训练阶段执行）---
         if self.optimizer is not None and self.stage == "train":
@@ -121,13 +127,15 @@ class KerasModel(torch.nn.Module):
     forward方法用于执行模型的前向传播。
     """
 
-    def __init__(self, device, dtype, net, loss_fn, metrics_dict=None, optimizer=None, lr_scheduler=None):
+    def __init__(self, device, dtype, net, Phi, Qinit, loss_fn, metrics_dict=None, optimizer=None, lr_scheduler=None):
         super().__init__()
         self.history = {}  # 用于记录训练和验证过程中的损失和指标历史数据
 
         self.device = device
         self.dtype = dtype
         self.net = net  # 神经网络模型
+        self.Phi = Phi  # 采样矩阵
+        self.Qinit = Qinit  # 初始值
         self.loss_fn = loss_fn  # 损失函数
         self.metrics_dict = nn.ModuleDict(metrics_dict)  # 指标字典，用于评估模型性能
 
@@ -154,7 +162,8 @@ class KerasModel(torch.nn.Module):
             printlog("Epoch {0} / {1}".format(epoch, epochs))
 
             # 1，train -------------------------------------------------
-            train_step_runner = StepRunner(device=self.device, dtype=self.dtype, net=self.net, stage="train",
+            train_step_runner = StepRunner(device=self.device, dtype=self.dtype, net=self.net,
+                                           Phi=self.Phi, Qinit=self.Qinit, stage="train",
                                            loss_fn=self.loss_fn, metrics_dict=deepcopy(self.metrics_dict),
                                            optimizer=self.optimizer, lr_scheduler=self.lr_scheduler)
             train_epoch_runner = EpochRunner(train_step_runner)
@@ -165,7 +174,8 @@ class KerasModel(torch.nn.Module):
 
             # 2，validate -------------------------------------------------
             if val_data:
-                val_step_runner = StepRunner(device=self.device, dtype=self.dtype, net=self.net, stage="val",
+                val_step_runner = StepRunner(device=self.device, dtype=self.dtype, net=self.net,
+                                             Phi=self.Phi, Qinit=self.Qinit, stage="val",
                                              loss_fn=self.loss_fn, metrics_dict=deepcopy(self.metrics_dict))
                 val_epoch_runner = EpochRunner(val_step_runner)
                 with torch.no_grad():  # EpochRunner中已经包含了torch.no_grad()??????
@@ -194,7 +204,8 @@ class KerasModel(torch.nn.Module):
 
     @torch.no_grad()  # 使用装饰器整个函数内禁用梯度计算
     def evaluate(self, val_data):
-        val_step_runner = StepRunner(device=self.device, dtype=self.dtype, net=self.net, stage="val",
+        val_step_runner = StepRunner(device=self.device, dtype=self.dtype, net=self.net,
+                                     Phi=self.Phi, Qinit=self.Qinit, stage="val",
                                      loss_fn=self.loss_fn, metrics_dict=deepcopy(self.metrics_dict))
         val_epoch_runner = EpochRunner(val_step_runner)
         val_metrics = val_epoch_runner(val_data)
